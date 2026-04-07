@@ -1,3 +1,19 @@
 {
-  "requests": []
+  "requests": [
+    {
+      "id": "20260408-miercoles-1715-v-cross",
+      "club": "Bolueta",
+      "day": "miercoles",
+      "time": "17:15",
+      "class_name": "V-Cross",
+      "target_date": "2026-04-08",
+      "created_at": "2026-04-07T23:09:45.669992+02:00",
+      "watch_until": "2026-04-08T17:10:00+02:00",
+      "status": "booked",
+      "attempts": 1,
+      "last_checked_at": "2026-04-07T23:10:03.455930+02:00",
+      "last_result": "✅ ¡Reserva confirmada! V-Cross a las 17:15",
+      "booked_at": "2026-04-07T23:10:44.704513+02:00"
+    }
+  ]
 }
