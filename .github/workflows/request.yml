@@ -1,0 +1,101 @@
+name: 📝 VGymRobot - Solicitar Reserva
+
+on:
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "Día de la clase"
+        required: true
+        type: choice
+        options:
+          - lunes
+          - martes
+          - miercoles
+          - jueves
+          - viernes
+          - sabado
+          - domingo
+      time:
+        description: "Hora de la clase (HH:MM)"
+        required: true
+        type: string
+      class_name:
+        description: "Nombre de la clase"
+        required: true
+        type: string
+      watch_until:
+        description: "Opcional: límite de vigilancia (YYYY-MM-DD HH:MM o ISO)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+
+concurrency:
+  group: vgymrobot-requests-state
+  cancel-in-progress: false
+
+jobs:
+  create-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: 📦 Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 📝 Crear solicitud
+        id: create_request
+        env:
+          WATCH_UNTIL: ${{ inputs.watch_until }}
+        run: |
+          ARGS=(
+            --day "${{ inputs.day }}"
+            --time "${{ inputs.time }}"
+            --class-name "${{ inputs.class_name }}"
+          )
+
+          if [ -n "$WATCH_UNTIL" ]; then
+            ARGS+=(--watch-until "$WATCH_UNTIL")
+          fi
+
+          python src/request_create.py "${ARGS[@]}"
+
+      - name: 🔐 Crear archivo .env desde secrets
+        run: |
+          echo "GYM_USERNAME=${{ secrets.GYM_USERNAME }}" > .env
+          echo "GYM_PASSWORD=${{ secrets.GYM_PASSWORD }}" >> .env
+          echo "NTFY_TOPIC=${{ secrets.NTFY_TOPIC }}" >> .env
+
+      - name: 🚀 Primer intento inmediato
+        run: python src/process_requests.py --request-id "${{ steps.create_request.outputs.request_id }}"
+
+      - name: 💾 Guardar estado actualizado
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- state/requests.json; then
+            git add state/requests.json
+            git commit -m "chore: upsert booking request"
+            git push
+          else
+            echo "No hay cambios de estado"
+          fi

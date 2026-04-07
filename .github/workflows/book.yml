@@ -1,0 +1,62 @@
+name: 🤖 VGymRobot - Procesar Solicitudes
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Revisa solicitudes activas cada 10 minutos.
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+
+concurrency:
+  group: vgymrobot-requests-state
+  cancel-in-progress: false
+
+jobs:
+  process-requests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🐍 Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: 📦 Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 🔐 Crear archivo .env desde secrets
+        run: |
+          echo "GYM_USERNAME=${{ secrets.GYM_USERNAME }}" > .env
+          echo "GYM_PASSWORD=${{ secrets.GYM_PASSWORD }}" >> .env
+          echo "NTFY_TOPIC=${{ secrets.NTFY_TOPIC }}" >> .env
+
+      - name: 🤖 Procesar solicitudes activas
+        run: python src/process_requests.py
+
+      - name: 💾 Guardar estado actualizado
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if ! git diff --quiet -- state/requests.json; then
+            git add state/requests.json
+            git commit -m "chore: update booking requests state"
+            git push
+          else
+            echo "No hay cambios de estado"
+          fi

@@ -1,0 +1,83 @@
+# ============================================
+# VGymRobot - Preferencias de Reserva
+# ============================================
+# Este archivo define QUÉ clases quieres reservar.
+# Edítalo según tus necesidades.
+
+gym:
+  name: "Vivagym"
+  base_url: "https://gimnasios.vivagym.es"
+  login_path: "/login"
+
+# ============================================
+# Club (centro)
+# ============================================
+# Nombre exacto del centro tal como aparece en Vivagym
+# El bot ya tiene Bolueta preseleccionado en la cuenta
+club: "Bolueta"
+
+# ============================================
+# Clases objetivo (ordenadas por prioridad)
+# ============================================
+# day: lunes | martes | miercoles | jueves | viernes | sabado | domingo
+# time: formato H:MM o HH:MM tal como aparece en la web (ej: "7:00", "17:00")
+# class_name: nombre de la clase tal como aparece en la web
+#             Coincidencia parcial e insensible a mayúsculas
+# enabled: true/false para activar/desactivar sin borrar
+#
+# Clases disponibles en Bolueta (miércoles ejemplo):
+#   V-Cross, V-Power, V-Yoga, Pilates, GAP, Cycling,
+#   Virtual Cycling, Virtual Fight, Virtual Power
+
+targets:
+  - day: "miercoles"
+    time: "19:00"
+    class_name: "GAP"
+    enabled: true
+
+  - day: "miercoles"
+    time: "17:00"
+    class_name: "V-Power"
+    enabled: true
+
+  - day: "miercoles"
+    time: "10:00"
+    class_name: "V-Power"
+    enabled: false
+
+# ============================================
+# Configuración de reservas
+# ============================================
+booking:
+  # Ventana de vigilancia antes de la clase.
+  # Si una clase es a las 20:00 y pones 1, el bot empezará a vigilarla
+  # desde 24h antes, es decir, desde las 20:00 del día anterior.
+  days_in_advance: 1
+
+  # Solo útil si quieres una puerta horaria adicional global.
+  # Para cazar desapuntamientos normalmente no hace falta.
+  booking_opens_at: "00:00"
+
+  # Para esta casuística interesa vigilar por proximidad a la clase,
+  # no por una hora fija diaria.
+  respect_opening_time: false
+
+# ============================================
+# Reintentos
+# ============================================
+retry:
+  max_attempts: 20
+  initial_delay_seconds: 15
+  backoff_multiplier: 1.3
+  max_delay_seconds: 120
+  # Tiempo máximo total de ejecución (en minutos)
+  # Importante para GitHub Actions (evitar consumir minutos gratis)
+  max_runtime_minutes: 8
+
+# ============================================
+# Notificaciones (fase posterior al MVP)
+# ============================================
+notifications:
+  enabled: false
+  method: "push"            # "push" (ntfy.sh)
+  ntfy_topic: "vgymrobot"
