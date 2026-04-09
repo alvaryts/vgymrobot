@@ -15,6 +15,11 @@ venv/
 .venv/
 env/
 
+# Local Node/Supabase CLI bootstrap
+node_modules/
+package-lock.json
+package.json
+
 # Logs
 logs/*.log
 

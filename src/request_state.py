@@ -162,22 +162,31 @@ def upsert_request(
     requests: list[BookingRequest], new_request: BookingRequest
 ) -> tuple[list[BookingRequest], BookingRequest, bool]:
     """
-    Inserta la solicitud salvo que ya exista una igual pendiente.
+    Inserta la solicitud o reactiva una previa con el mismo id.
 
     Returns:
         (lista_actualizada, solicitud_existente_o_nueva, created)
     """
     for request in requests:
-        same_target = (
-            request.club == new_request.club
-            and request.day == new_request.day
-            and request.time == new_request.time
-            and request.class_name.lower() == new_request.class_name.lower()
-            and request.target_date == new_request.target_date
-            and request.status == "pending"
-        )
-        if same_target:
+        if request.id != new_request.id:
+            continue
+
+        if request.status == "pending":
             return requests, request, False
+
+        request.club = new_request.club
+        request.day = new_request.day
+        request.time = new_request.time
+        request.class_name = new_request.class_name
+        request.target_date = new_request.target_date
+        request.created_at = new_request.created_at
+        request.watch_until = new_request.watch_until
+        request.status = "pending"
+        request.attempts = 0
+        request.last_checked_at = None
+        request.last_result = None
+        request.booked_at = None
+        return requests, request, False
 
     requests.append(new_request)
     return requests, new_request, True
@@ -210,3 +219,13 @@ def active_requests(
             continue
         result.append(request)
     return result
+
+
+def get_request_by_id(
+    requests: list[BookingRequest], request_id: str
+) -> BookingRequest | None:
+    """Devuelve una solicitud por id si existe."""
+    for request in requests:
+        if request.id == request_id:
+            return request
+    return None

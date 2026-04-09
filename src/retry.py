@@ -50,6 +50,11 @@ class RetryManager:
         return self.elapsed_minutes < self.config.max_runtime_minutes
 
     @property
+    def remaining_seconds(self) -> float:
+        """Segundos restantes antes de agotar el tiempo máximo."""
+        return max(0.0, self.config.max_runtime_minutes * 60 - (self.elapsed_minutes * 60))
+
+    @property
     def attempts_remaining(self) -> bool:
         """Comprueba si quedan intentos."""
         return self.attempt < self.config.max_attempts
@@ -78,6 +83,7 @@ class RetryManager:
         """
         self.start_time = time.time()
         self.attempt = 0
+        last_result = None
 
         while self.can_retry():
             self.attempt += 1
@@ -88,6 +94,7 @@ class RetryManager:
 
             try:
                 result = await operation(*args, **kwargs)
+                last_result = result
 
                 if result.get("booked", False):
                     logger.info(
@@ -106,6 +113,7 @@ class RetryManager:
 
             except Exception as e:
                 logger.error(f"   ❌ Error en intento {self.attempt}: {e}")
+                last_result = {"booked": False, "reason": str(e)}
 
             # ¿Queda margen para otro intento?
             if not self.can_retry():
@@ -113,6 +121,11 @@ class RetryManager:
 
             # Esperar con backoff
             delay = self.current_delay
+            if delay >= self.remaining_seconds:
+                logger.info(
+                    "   ⏱️ No queda margen suficiente para esperar otro ciclo completo"
+                )
+                break
             logger.info(f"   ⏳ Esperando {delay:.0f}s antes del siguiente intento...")
             await asyncio.sleep(delay)
 
@@ -122,7 +135,7 @@ class RetryManager:
         )
         return {
             "success": False,
-            "result": None,
+            "result": last_result,
             "attempts": self.attempt,
             "elapsed_minutes": self.elapsed_minutes,
         }

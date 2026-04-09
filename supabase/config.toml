@@ -1,0 +1,5 @@
+[functions.telegram-webhook]
+verify_jwt = false
+
+[functions.worker-api]
+verify_jwt = false

@@ -201,7 +201,7 @@ async def navigate_to_booking(page: Page, config: AppConfig) -> bool:
         # Si ya estamos en /booking, solo recargar
         if "/booking" in current_url:
             logger.debug("   Ya estamos en /booking, recargando...")
-            await page.reload(wait_until="networkidle", timeout=15000)
+            await page.reload(wait_until="domcontentloaded", timeout=15000)
         else:
             # Intentar click en 'Nueva reserva' desde el dashboard
             nueva_reserva = page.locator("text=Nueva reserva").first

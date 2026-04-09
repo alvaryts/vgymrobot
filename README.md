@@ -12,6 +12,7 @@ Bot automatizado para reservar clases dirigidas en **Vivagym** de forma persiste
 - También sirve para **cazar desapuntamientos** dentro de la ventana previa a la clase
 - Puede guardar **screenshots y logs** locales para debugging
 - (Futuro) Envía notificación push cuando consigue la reserva
+- Incluye un MVP multiusuario con **Supabase + Telegram + GitHub Actions**
 
 ## 📁 Estructura
 
@@ -38,8 +39,11 @@ vgymrobot/
 ├── .github/workflows/
 │   ├── request.yml              # 📝 Crear solicitud manual
 │   └── book.yml                 # ⏰ Procesar solicitudes activas
+│   └── remote-worker.yml        # 🌐 Worker largo para solicitudes externas
 │
 ├── state/                       # Estado persistente de solicitudes
+├── docs/                        # Documentación adicional
+├── supabase/                    # Backend MVP multiusuario
 ├── logs/                        # Logs de ejecución
 └── screenshots/                 # Capturas de debugging
 ```
@@ -125,3 +129,14 @@ worker periódico consume minutos incluso cuando no consigue reserva.
 - **Selectores**: Los selectores del DOM pueden cambiar si Vivagym actualiza su web. En ese caso habrá que actualizar `auth.py` y `booking.py`.
 - **Uso responsable**: Este bot es para uso personal. No abuses de la frecuencia de ejecución.
 - **Estado**: Las solicitudes activas se guardan en `state/requests.json`.
+
+## 🌐 MVP Multiusuario
+
+Si quieres operar para usuarios externos con sus propias credenciales, el carril
+recomendado ahora es:
+
+- `Telegram` como interfaz móvil
+- `Supabase` para credenciales y solicitudes
+- `remote-worker.yml` en GitHub Actions para ejecutar Playwright
+
+La guía completa está en `docs/multiuser-supabase-telegram.md`.

@@ -71,8 +71,8 @@ retry:
   backoff_multiplier: 1.3
   max_delay_seconds: 120
   # Tiempo máximo total de ejecución (en minutos)
-  # Importante para GitHub Actions (evitar consumir minutos gratis)
-  max_runtime_minutes: 8
+  # Cada ejecución insistirá durante este tiempo antes de rendirse.
+  max_runtime_minutes: 5
 
 # ============================================
 # Notificaciones (fase posterior al MVP)

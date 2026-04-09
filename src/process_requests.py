@@ -22,6 +22,7 @@ from src.notifier import notify_failure, notify_success
 from src.request_state import (
     active_requests,
     expire_overdue_requests,
+    get_request_by_id,
     load_requests,
     save_requests,
 )
@@ -38,15 +39,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def run() -> int:
-    args = parse_args()
+async def process_pending_requests(request_id: str | None = None) -> int:
     config = load_config()
     requests = load_requests()
     requests = expire_overdue_requests(requests, config)
 
     pending = active_requests(requests, config)
-    if args.request_id:
-        pending = [request for request in pending if request.id == args.request_id]
+    if request_id:
+        pending = [request for request in pending if request.id == request_id]
 
     if not pending:
         logger.info("ℹ️  No hay solicitudes activas para procesar")
@@ -88,13 +88,13 @@ async def run() -> int:
                 logger.info(f"{'─' * 40}")
 
                 config.club = request.club or config.club
-
                 request.attempts += 1
                 request.last_checked_at = get_local_now(config).isoformat()
 
                 booking_ready = await navigate_to_booking(page, config)
                 if not booking_ready:
                     request.last_result = "No se pudo cargar la sección de reservas"
+                    save_requests(requests)
                     continue
 
                 result = await find_and_book_class(page, request.to_target(), config)
@@ -111,6 +111,8 @@ async def run() -> int:
                         f"{request.last_result}"
                     )
 
+                save_requests(requests)
+
             requests = expire_overdue_requests(requests, config)
 
         finally:
@@ -118,6 +120,11 @@ async def run() -> int:
 
     save_requests(requests)
     return 0
+
+
+async def run() -> int:
+    args = parse_args()
+    return await process_pending_requests(request_id=args.request_id)
 
 
 if __name__ == "__main__":

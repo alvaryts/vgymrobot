@@ -80,12 +80,16 @@ async def login(page: Page, config: AppConfig) -> bool:
             return True
 
         # Comprobar si hay error visible
-        error_msg = page.locator(
-            ".error-message, .alert-danger, .login-error, "
-            "text=/error|incorrecta|inválid/i"
+        css_errors = page.locator(".error-message, .alert-danger, .login-error")
+        text_errors = page.get_by_text(
+            r"error|incorrecta|inválid", exact=False
         )
-        if await error_msg.count() > 0:
-            error_text = await error_msg.first.text_content()
+        if await css_errors.count() > 0:
+            error_text = await css_errors.first.text_content()
+            logger.error(f"❌ Error de login: {error_text}")
+            return False
+        if await text_errors.count() > 0:
+            error_text = await text_errors.first.text_content()
             logger.error(f"❌ Error de login: {error_text}")
             return False
 

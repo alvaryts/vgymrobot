@@ -100,6 +100,19 @@ class AppConfig:
     retry: RetryConfig = field(default_factory=RetryConfig)
 
 
+def with_runtime_credentials(
+    config: AppConfig,
+    username: str,
+    password: str,
+    club: Optional[str] = None,
+) -> AppConfig:
+    """Inyecta credenciales y club en una configuración ya cargada."""
+    config.credentials = Credentials(username=username, password=password)
+    if club:
+        config.club = club
+    return config
+
+
 def get_local_now(config: AppConfig) -> datetime:
     """Devuelve la fecha/hora actual en la zona horaria configurada."""
     return datetime.now(ZoneInfo(config.gym.timezone))
