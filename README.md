@@ -1,564 +1,572 @@
 # VGymRobot
 
-Automatización de reservas de clases en VivaGym con tres carriles de ejecución:
+Motor de automatización para reservas de clases en VivaGym.
 
-1. `Local legacy`: script Python tradicional con `.env` y `preferences.yaml`.
-2. `Local watch`: vigilancia local de una clase concreta cada `N` segundos durante `M` minutos.
-3. `Remoto multiusuario`: Telegram + Supabase + GitHub Actions + Playwright.
+El repositorio contiene hoy tres carriles de ejecución que comparten el mismo núcleo Playwright:
 
-El proyecto está orientado a cazar plazas liberadas por desapuntamientos y no solo a reservar justo al abrirse la ventana.
+1. `Local legacy`
+2. `Local watch`
+3. `Remote multi-user`
 
-## Estado actual
+El objetivo funcional del sistema es:
 
-La arquitectura actual convive en dos capas:
+- identificar una clase concreta por `día + hora + nombre`
+- comprobar disponibilidad real
+- intentar reservar
+- repetir durante una ventana de vigilancia si no hay plaza en el primer intento
 
-- Una capa `single-user` basada en archivos locales y workflows clásicos de GitHub.
-- Una capa `multi-user MVP` basada en `Telegram`, `Supabase` y un `remote worker` en GitHub Actions.
+## Resumen rápido
 
-La capa multiusuario es hoy el camino más avanzado para uso real desde móvil.
+La arquitectura actual se puede leer así:
 
-## Qué hace exactamente
+- `Python + Playwright` es el motor real de reserva
+- `Supabase` es la capa de backend y persistencia
+- `Telegram` es la interfaz de usuario móvil
+- `GitHub Actions` es el worker remoto que ejecuta el motor Playwright
 
-- Hace login en la web de VivaGym con Playwright.
-- Navega a `/booking` y selecciona el día correcto en el swiper.
-- Busca una clase por `día + hora + nombre`.
-- Comprueba disponibilidad real en la tarjeta de la clase.
-- Expande la entrada de la clase y pulsa el botón real de reserva.
-- Reintenta de forma periódica hasta reservar o expirar la ventana de vigilancia.
-- Persiste el estado para poder consultar intentos, estado final y motivo.
+## Arquitectura general
 
-## Modos de uso
-
-### 1. Modo local legacy
-
-Archivo principal:
-- [main.py](/Users/alopez/vgymrobot/vgymrobot/src/main.py)
-
-Características:
-- carga `preferences.yaml`
-- carga credenciales desde `.env`
-- decide qué `targets` están dentro de la ventana de vigilancia
-- ejecuta Playwright en local
-- usa `RetryManager` para reintentos en una sola ejecución
-
-Cuándo usarlo:
-- pruebas rápidas
-- depuración local
-- reservas con una sola cuenta
-
-### 2. Modo local watch
-
-Archivo principal:
-- [local_watch.py](/Users/alopez/vgymrobot/vgymrobot/src/local_watch.py)
-
-Características:
-- crea o reactiva una solicitud local
-- la guarda en `state/requests.json`
-- ejecuta un intento completo
-- duerme `interval_seconds`
-- repite hasta reservar o hasta `duration_minutes`
-
-Cuándo usarlo:
-- quieres probar localmente el patrón “cada 2 minutos durante 2 horas”
-- quieres tener control manual total del proceso
-
-### 3. Modo remoto multiusuario
-
-Piezas principales:
-- bot de Telegram
-- Supabase como backend y persistencia
-- GitHub Actions como worker Playwright
-
-Cuándo usarlo:
-- un usuario no técnico quiere lanzar reservas desde móvil
-- varias personas quieren usar el sistema con sus propias credenciales
-- no quieres depender de tu máquina encendida
-
-## Arquitectura actual
-
-```text
-Telegram user
-  -> telegram-webhook (Supabase Edge Function)
-  -> booking_requests + member_accounts (Supabase DB)
-  -> remote-worker.yml (GitHub Actions)
-  -> remote_worker.py
-  -> worker-api (Supabase Edge Function)
-  -> booking_requests update
-  -> Telegram notification
+```mermaid
+flowchart LR
+    U["Usuario"] --> T["Bot de Telegram"]
+    T --> W["telegram-webhook<br/>Supabase Edge Function"]
+    W --> DB["Supabase Database"]
+    W --> GH["GitHub Actions<br/>remote-worker.yml"]
+    GH --> RW["remote_worker.py"]
+    RW --> API["worker-api<br/>Supabase Edge Function"]
+    API --> DB
+    API --> T
 ```
 
-## Flujos completos
+## Qué hace cada pieza
 
-### Flujo A. Reserva local legacy
+### Telegram
 
-1. `python src/main.py`
-2. [config.py](/Users/alopez/vgymrobot/vgymrobot/src/config.py) carga:
-   - `preferences.yaml`
-   - `.env`
-3. [main.py](/Users/alopez/vgymrobot/vgymrobot/src/main.py) filtra `targets`
-4. [auth.py](/Users/alopez/vgymrobot/vgymrobot/src/auth.py) hace login
-5. [booking.py](/Users/alopez/vgymrobot/vgymrobot/src/booking.py) navega a `/booking`
-6. [retry.py](/Users/alopez/vgymrobot/vgymrobot/src/retry.py) coordina reintentos en una sola ejecución
-7. [notifier.py](/Users/alopez/vgymrobot/vgymrobot/src/notifier.py) notifica el resultado
+Telegram es la puerta de entrada para usuarios no técnicos.
 
-### Flujo B. Vigilancia local concreta
+Su papel es:
 
-1. `python src/local_watch.py --day ... --time ... --class-name ...`
-2. [request_state.py](/Users/alopez/vgymrobot/vgymrobot/src/request_state.py) crea o reactiva una `BookingRequest`
-3. la solicitud se guarda en [requests.json](/Users/alopez/vgymrobot/vgymrobot/state/requests.json)
-4. [local_watch.py](/Users/alopez/vgymrobot/vgymrobot/src/local_watch.py) llama a [process_requests.py](/Users/alopez/vgymrobot/vgymrobot/src/process_requests.py)
-5. cada ciclo hace:
-   - login
-   - navegación
-   - intento de reserva
-   - actualización de estado
-6. al terminar:
-   - `booked`
-   - `expired`
-   - o `cancelled`
+- recibir comandos del usuario
+- entregar esos comandos al webhook configurado
+- mostrar confirmaciones, estados y resultados
 
-### Flujo C. GitHub clásico por solicitudes en archivo
+Telegram no ejecuta lógica de reserva. Solo actúa como interfaz conversacional.
 
-Workflows implicados:
-- [request.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/request.yml)
-- [book.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/book.yml)
+### Supabase
 
-Secuencia:
-1. el usuario lanza `VGymRobot - Solicitar Reserva`
-2. [request_create.py](/Users/alopez/vgymrobot/vgymrobot/src/request_create.py) inserta o reutiliza la solicitud
-3. la solicitud se guarda en [requests.json](/Users/alopez/vgymrobot/vgymrobot/state/requests.json)
-4. se hace un primer intento inmediato
-5. `VGymRobot - Procesar Solicitudes` sigue revisando pendientes por cron
+Supabase es la capa de backend del sistema remoto.
 
-Este carril sigue existiendo, pero ya no es la opción más cómoda para uso externo.
+Su papel es:
 
-### Flujo D. Telegram + Supabase + GitHub remote worker
+- almacenar cuentas y solicitudes
+- exponer funciones serverless para entrada y coordinación
+- servir de punto de verdad para el estado de una reserva
 
-Secuencia exacta de una petición:
+Dentro de Supabase hay dos piezas distintas:
 
-1. Un usuario escribe en Telegram:
-   - `/credenciales correo contraseña`
-   - `/reservar viernes 16:15 V-Metcon`
+1. `Database`
+2. `Edge Functions`
 
-2. Telegram envía el update al webhook:
-   - [telegram-webhook/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/telegram-webhook/index.ts)
+### Database
 
-3. El webhook responde `200 OK` inmediatamente a Telegram y procesa el comando en background con `EdgeRuntime.waitUntil(...)`.
-
-4. Si el comando es `/credenciales`:
-   - cifra email y contraseña con `CREDENTIALS_SECRET`
-   - hace upsert en la tabla `member_accounts`
-
-5. Si el comando es `/reservar`:
-   - busca la cuenta asociada al `telegram_chat_id`
-   - crea una fila en `booking_requests`
-   - calcula:
-     - `target_date`
-     - `interval_seconds`
-     - `watch_until`
-   - responde en Telegram con `Solicitud creada`
-   - llama a GitHub Actions mediante API REST
-
-6. GitHub dispara:
-   - [remote-worker.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/remote-worker.yml)
-
-7. El workflow ejecuta:
-   - [remote_worker.py](/Users/alopez/vgymrobot/vgymrobot/src/remote_worker.py)
-
-8. `remote_worker.py`:
-   - pide la solicitud a [worker_api.py](/Users/alopez/vgymrobot/vgymrobot/src/worker_api.py)
-   - `worker_api.py` llama a:
-     - [worker-api/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/worker-api/index.ts)
-   - el backend devuelve:
-     - metadatos de la solicitud
-     - credenciales del usuario descifradas
-
-9. El worker remoto:
-   - inyecta credenciales en `AppConfig`
-   - ejecuta un intento completo con Playwright
-   - actualiza `attempts`, `last_result`, `last_checked_at`
-   - duerme `interval_seconds`
-   - repite hasta `booked`, `expired` o `cancelled`
-
-10. Cuando el backend recibe un update final:
-   - si `status = booked`, envía mensaje de éxito por Telegram
-   - si `status = expired`, envía mensaje de expiración por Telegram
-
-## Privacidad y aislamiento entre usuarios
-
-Las respuestas del bot son `point-to-point`, no broadcast.
-
-Cada usuario queda asociado a su `telegram_chat_id`:
-
-- las credenciales se guardan en `member_accounts.telegram_chat_id`
-- `/estado` filtra por la cuenta asociada a ese chat
-- `/cancelar` solo afecta a solicitudes del mismo chat
-- las notificaciones finales se envían al `telegram_chat_id` asociado a la solicitud
-
-Consecuencia:
-- si tú reservas desde tu chat, las respuestas te llegan a ti
-- si otra persona reserva desde su chat, las respuestas le llegan a esa persona
-- no se mezclan salvo que uséis un grupo o la misma cuenta de Telegram
-
-## Artefactos y persistencia
-
-### Archivos locales
-
-- [preferences.yaml](/Users/alopez/vgymrobot/vgymrobot/preferences.yaml)
-  - configuración base del gimnasio
-  - targets legacy
-  - ventana de vigilancia base
-  - parámetros de retry legacy
-
-- [.env.example](/Users/alopez/vgymrobot/vgymrobot/.env.example)
-  - plantilla de variables de entorno locales
-
-- [requests.json](/Users/alopez/vgymrobot/vgymrobot/state/requests.json)
-  - estado de solicitudes del carril local / GitHub clásico
-
-- `screenshots/`
-  - capturas de Playwright para debug
-
-- `logs/`
-  - logs locales de ejecución
-
-### Base de datos remota
-
-Definida en [schema.sql](/Users/alopez/vgymrobot/vgymrobot/supabase/schema.sql).
-
-Tablas:
+La base de datos modela dos conceptos:
 
 - `member_accounts`
-  - un usuario por `telegram_chat_id`
-  - credenciales cifradas
-  - club por defecto
-
 - `booking_requests`
-  - solicitud individual de reserva
-  - estado operativo del worker
-  - timestamps y resultado del último intento
 
-Campos relevantes de `booking_requests`:
+`member_accounts` representa la cuenta operativa de cada usuario del bot.  
+`booking_requests` representa cada solicitud concreta de reserva.
 
-- `id`
-- `account_id`
-- `club`
-- `day`
-- `time`
-- `class_name`
-- `target_date`
-- `interval_seconds`
-- `watch_until`
-- `status`
-- `attempts`
-- `last_result`
-- `last_checked_at`
-- `booked_at`
+La definición vive en [schema.sql](/Users/alopez/vgymrobot/vgymrobot/supabase/schema.sql).
 
-## Componentes técnicos
+### Edge Functions
 
-### Núcleo Playwright
+Hay dos funciones principales:
+
+- [telegram-webhook](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/telegram-webhook/index.ts)
+- [worker-api](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/worker-api/index.ts)
+
+`telegram-webhook` recibe comandos desde Telegram y los transforma en acciones del sistema.
+
+`worker-api` es la interfaz que usa el worker remoto para:
+
+- cargar una solicitud
+- cargar el contexto asociado a esa solicitud
+- persistir el resultado de cada intento
+
+### GitHub Actions
+
+GitHub Actions no hace de backend. Hace de entorno de ejecución remoto.
+
+Su papel es:
+
+- arrancar un runner efímero
+- instalar dependencias
+- lanzar el worker Python con Playwright
+- mantener el bucle de reintentos durante una ventana temporal
+
+El workflow principal de esta arquitectura es:
+
+- [remote-worker.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/remote-worker.yml)
+
+### Python + Playwright
+
+Python es el núcleo del sistema.
+
+Su papel es:
+
+- transformar una solicitud de reserva en acciones concretas sobre la web
+- navegar por la SPA de VivaGym
+- decidir si una clase coincide con lo pedido
+- ejecutar el click de reserva
+- evaluar el resultado del intento
+
+## Vista técnica por capas
+
+```mermaid
+flowchart TD
+    A["Interfaz de usuario"] --> B["Telegram"]
+    B --> C["Edge Function de entrada"]
+    C --> D["Persistencia de dominio"]
+    C --> E["Despacho de worker"]
+    E --> F["GitHub Action remota"]
+    F --> G["Worker Python"]
+    G --> H["Motor Playwright"]
+    G --> I["API de coordinación"]
+    I --> D
+    I --> B
+```
+
+## Modos de ejecución
+
+## 1. Local legacy
+
+Entrada:
+
+- [main.py](/Users/alopez/vgymrobot/vgymrobot/src/main.py)
+
+Descripción:
+
+- carga `preferences.yaml`
+- carga credenciales desde `.env`
+- decide qué targets están “activos hoy”
+- ejecuta Playwright en local
+- usa un bucle interno de reintentos con `RetryManager`
+
+Cuándo encaja:
+
+- pruebas locales
+- exploración del DOM
+- uso de una sola cuenta
+
+## 2. Local watch
+
+Entrada:
+
+- [local_watch.py](/Users/alopez/vgymrobot/vgymrobot/src/local_watch.py)
+
+Descripción:
+
+- crea o reactiva una solicitud local
+- persiste el estado en [requests.json](/Users/alopez/vgymrobot/vgymrobot/state/requests.json)
+- ejecuta un intento completo por ciclo
+- espera entre ciclos
+- termina en `booked`, `expired` o `cancelled`
+
+Cuándo encaja:
+
+- quieres simular el patrón real de vigilancia periódica
+- quieres controlar localmente intervalo y duración
+
+## 3. Remote multi-user
+
+Entradas y piezas:
+
+- Telegram
+- Supabase
+- GitHub Actions
+- Python worker remoto
+
+Descripción:
+
+- el usuario crea una solicitud desde el móvil
+- el backend la persiste
+- el backend dispara un worker remoto
+- el worker consulta el estado de la solicitud y ejecuta Playwright
+- el resultado final vuelve al backend y al usuario
+
+Cuándo encaja:
+
+- varios usuarios
+- operación desatendida
+- uso desde móvil
+- evitar depender de una máquina local encendida
+
+## Artefactos del repositorio
+
+### Código Python
 
 - [auth.py](/Users/alopez/vgymrobot/vgymrobot/src/auth.py)
-  - selectores del login
-  - detección de dashboard
-  - detección de errores de login
+  - login y verificación de sesión
 
 - [booking.py](/Users/alopez/vgymrobot/vgymrobot/src/booking.py)
-  - navegación a `/booking`
-  - selección de día en el swiper
-  - matching por nombre y hora
-  - expansión de la clase
-  - click en `book-button`
-  - heurísticas de confirmación de reserva
-
-### Configuración
+  - navegación a reservas, selección de día, matching de clase y lógica de reserva
 
 - [config.py](/Users/alopez/vgymrobot/vgymrobot/src/config.py)
-  - modelo `AppConfig`
-  - carga YAML + `.env`
-  - `with_runtime_credentials(...)` para inyectar credenciales remotas
+  - carga de configuración base y ensamblado de `AppConfig`
 
-### Persistencia local
+- [retry.py](/Users/alopez/vgymrobot/vgymrobot/src/retry.py)
+  - gestión de reintentos del carril legacy
 
 - [request_state.py](/Users/alopez/vgymrobot/vgymrobot/src/request_state.py)
-  - modelo `BookingRequest`
-  - alta/reactivación por `id`
-  - expiración de solicitudes vencidas
+  - modelo de solicitud local persistida
 
 - [request_create.py](/Users/alopez/vgymrobot/vgymrobot/src/request_create.py)
-  - crea solicitudes manuales del carril clásico
+  - alta de solicitudes del carril clásico
 
 - [process_requests.py](/Users/alopez/vgymrobot/vgymrobot/src/process_requests.py)
-  - procesa una o varias solicitudes locales persistidas
+  - procesamiento del carril clásico basado en archivo
 
-### Worker remoto
+- [local_watch.py](/Users/alopez/vgymrobot/vgymrobot/src/local_watch.py)
+  - vigilancia local cíclica
 
 - [remote_worker.py](/Users/alopez/vgymrobot/vgymrobot/src/remote_worker.py)
-  - bucle de intento remoto
-  - consulta estado remoto antes de cada intento
-  - respeta `cancelled`, `booked` y `expired`
+  - worker remoto de larga duración
 
 - [worker_api.py](/Users/alopez/vgymrobot/vgymrobot/src/worker_api.py)
-  - cliente HTTP minimalista hacia `worker-api`
+  - cliente Python hacia el backend remoto
 
-### Backend Supabase
+- [notifier.py](/Users/alopez/vgymrobot/vgymrobot/src/notifier.py)
+  - abstracción de notificaciones
 
-- [telegram-webhook/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/telegram-webhook/index.ts)
-  - entrada de comandos desde Telegram
-  - cifrado de credenciales
-  - creación de solicitudes
-  - disparo de GitHub
-
-- [worker-api/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/worker-api/index.ts)
-  - devuelve al worker la solicitud y credenciales descifradas
-  - persiste updates del worker
-  - envía notificaciones finales por Telegram
-
-- [_shared/crypto.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/_shared/crypto.ts)
-  - cifrado AES-GCM de credenciales
-
-- [_shared/github.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/_shared/github.ts)
-  - llamada a `workflow_dispatch` en GitHub
-
-- [_shared/telegram.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/_shared/telegram.ts)
-  - envío de mensajes con `sendMessage`
+- [logger.py](/Users/alopez/vgymrobot/vgymrobot/src/logger.py)
+  - logging común
 
 ### Workflows de GitHub
 
 - [request.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/request.yml)
-  - carril clásico manual basado en archivo
+  - alta manual de solicitudes en el carril clásico
 
 - [book.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/book.yml)
-  - cron del carril clásico
+  - procesamiento periódico del carril clásico
 
 - [remote-worker.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/remote-worker.yml)
   - worker remoto multiusuario
-  - `timeout-minutes: 150`
-  - `concurrency` por `request_id`
-
-## Selectores reales de VivaGym
-
-El sistema usa selectores `data-cy` observados directamente en la SPA de VivaGym.
-
-Ejemplos importantes:
-
-- filtro de centros
-- carrusel de fechas
-- entradas `participation-entry-*`
-- `booking-name`
-- `start-time`
-- `booking-state`
-- `expand-button`
-- `book-button`
-
-La lógica vive en [booking.py](/Users/alopez/vgymrobot/vgymrobot/src/booking.py).
-
-## Secretos y configuración
-
-### Local / single-user
-
-Archivo `.env`:
-
-- `GYM_USERNAME`
-- `GYM_PASSWORD`
-- opcional `NTFY_TOPIC`
-- opcional `NTFY_SERVER`
-
-### GitHub clásico
-
-Secrets de Actions:
-
-- `GYM_USERNAME`
-- `GYM_PASSWORD`
-- opcional `NTFY_TOPIC`
-
-### Supabase Edge Functions
-
-Secrets:
-
-- `CREDENTIALS_SECRET`
-  - cifra las credenciales de VivaGym por usuario
-
-- `TELEGRAM_BOT_TOKEN`
-  - token del bot de Telegram
-
-- `GITHUB_WORKFLOW_TOKEN`
-  - fine-grained PAT para disparar workflows
-
-- `GITHUB_OWNER`
-- `GITHUB_REPO`
-- `GITHUB_WORKFLOW_ID`
-- `GITHUB_REF`
-
-- `WORKER_SHARED_SECRET`
-  - secreto compartido entre `worker-api` y GitHub worker
-
-### GitHub Actions para el worker remoto
-
-Secrets:
-
-- `WORKER_API_BASE_URL`
-  - `https://<project-ref>.supabase.co/functions/v1`
-
-- `WORKER_SHARED_SECRET`
-  - debe coincidir exactamente con el de Supabase
-
-## Configuración de Supabase
-
-Archivos:
-
-- [schema.sql](/Users/alopez/vgymrobot/vgymrobot/supabase/schema.sql)
-- [config.toml](/Users/alopez/vgymrobot/vgymrobot/supabase/config.toml)
-
-`config.toml` desactiva `verify_jwt` para:
-
-- `telegram-webhook`
-- `worker-api`
-
-Esto es necesario porque:
-- Telegram no envía JWT de Supabase
-- GitHub tampoco va a llamar a `worker-api` con JWT de Supabase
-
-La protección de `worker-api` se hace con `x-worker-secret`.
-
-## Configuración de Telegram
-
-Comandos actuales:
-
-- `/start`
-- `/credenciales <correo> <contraseña>`
-- `/reservar <dia> <hora> <clase>`
-- `/estado`
-- `/cancelar <request_id>`
-
-Ejemplos válidos:
-
-```text
-/credenciales nombre@email.com clave123
-/reservar viernes 16:15 V-Metcon
-/reservar sabado 10:30 GAP
-/estado
-```
-
-Importante:
-- Telegram responde por chat privado
-- el webhook procesa en background para no bloquear la respuesta de Telegram
-- se puede limpiar la cola pendiente con `drop_pending_updates=true` al volver a hacer `setWebhook`
-
-## Observabilidad y monitorización
-
-### GitHub Actions
-
-Para el carril remoto:
-- abre `VGymRobot - Remote Worker`
-- inspecciona el job `remote-worker`
-
-Ahí verás:
-- login
-- navegación
-- intentos
-- espera entre ciclos
-- resultado de cada intento
 
 ### Supabase
 
-Tablas:
-- `booking_requests`
-- `member_accounts`
+- [schema.sql](/Users/alopez/vgymrobot/vgymrobot/supabase/schema.sql)
+  - modelo de datos
 
-Campos útiles en `booking_requests`:
+- [config.toml](/Users/alopez/vgymrobot/vgymrobot/supabase/config.toml)
+  - configuración de despliegue de funciones
+
+- [telegram-webhook/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/telegram-webhook/index.ts)
+  - función de entrada desde Telegram
+
+- [worker-api/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/worker-api/index.ts)
+  - función de coordinación con el worker remoto
+
+- [_shared/crypto.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/_shared/crypto.ts)
+  - utilidades compartidas de cifrado
+
+- [_shared/github.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/_shared/github.ts)
+  - utilidades para disparar workflows
+
+- [_shared/telegram.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/_shared/telegram.ts)
+  - utilidades para enviar mensajes a Telegram
+
+## Modelo de dominio
+
+### `member_accounts`
+
+Representa la cuenta operativa asociada a un usuario del bot.
+
+Responsabilidades:
+
+- vincular la identidad del usuario con una cuenta de reserva
+- almacenar el contexto estable de ese usuario
+- servir como dueño lógico de las solicitudes
+
+### `booking_requests`
+
+Representa una petición concreta de vigilancia y reserva.
+
+Responsabilidades:
+
+- identificar la clase objetivo
+- guardar la ventana temporal de vigilancia
+- registrar intentos y resultados
+- mantener el estado final
+
+Estados típicos:
+
+- `pending`
+- `booked`
+- `expired`
+- `cancelled`
+- `error`
+
+## Flujo completo de una solicitud remota
+
+```mermaid
+sequenceDiagram
+    participant User as Usuario
+    participant TG as Telegram
+    participant TW as telegram-webhook
+    participant DB as Supabase DB
+    participant GH as GitHub Action
+    participant RW as remote_worker.py
+    participant API as worker-api
+
+    User->>TG: /reservar <dia> <hora> <clase>
+    TG->>TW: update webhook
+    TW->>DB: crear booking_request
+    TW-->>TG: confirmación de creación
+    TW->>GH: disparar remote-worker.yml
+    GH->>RW: arrancar worker
+    loop cada ciclo
+        RW->>API: fetch request
+        API->>DB: leer solicitud y contexto
+        API-->>RW: datos de la solicitud
+        RW->>RW: login + búsqueda + intento
+        RW->>API: update request
+        API->>DB: persistir resultado
+    end
+    API-->>TG: mensaje final
+```
+
+## Qué modela el comportamiento del bot
+
+La lógica de producto no está en un solo sitio. Se reparte en varias capas.
+
+### La “intención” de una reserva
+
+La modelan:
+
+- `day`
+- `time`
+- `class_name`
+- `target_date`
+- `watch_until`
+- `interval_seconds`
+
+Esa combinación vive sobre todo en:
+
+- la fila de `booking_requests`
+- el objeto `BookingTarget` en Python
+
+### La “ejecución” de una reserva
+
+La modelan:
+
+- [remote_worker.py](/Users/alopez/vgymrobot/vgymrobot/src/remote_worker.py)
+- [booking.py](/Users/alopez/vgymrobot/vgymrobot/src/booking.py)
+- [auth.py](/Users/alopez/vgymrobot/vgymrobot/src/auth.py)
+
+Ahí se decide:
+
+- cuándo empezar un intento
+- cuándo detener el bucle
+- cómo navegar
+- cómo identificar la clase correcta
+- cómo interpretar el resultado del click
+
+### La “orquestación” de una reserva
+
+La modelan:
+
+- [telegram-webhook/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/telegram-webhook/index.ts)
+- [worker-api/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/worker-api/index.ts)
+- [remote-worker.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/remote-worker.yml)
+
+Ahí se decide:
+
+- cómo nace una solicitud
+- qué worker la ejecuta
+- dónde se persiste el estado
+- cómo vuelve el resultado al usuario
+
+## Qué hace exactamente `telegram-webhook`
+
+`telegram-webhook` es el adaptador entre un mensaje de Telegram y el dominio del proyecto.
+
+Responsabilidades:
+
+- aceptar comandos entrantes
+- normalizar el texto
+- decidir qué comando se ha recibido
+- resolver la identidad del usuario
+- crear o consultar entidades en base de datos
+- disparar el worker remoto cuando procede
+- responder por Telegram
+
+No hace Playwright. No interactúa con VivaGym.
+
+## Qué hace exactamente `worker-api`
+
+`worker-api` es el punto de coordinación entre el runner remoto y la persistencia.
+
+Responsabilidades:
+
+- entregar al worker el contexto de una solicitud
+- aceptar updates del worker
+- consolidar el estado final
+- actuar como capa de persistencia para el proceso remoto
+
+No crea solicitudes nuevas. No recibe comandos de usuario.
+
+## Qué hace exactamente `remote_worker.py`
+
+`remote_worker.py` es el proceso remoto de ejecución prolongada.
+
+Responsabilidades:
+
+- cargar una solicitud concreta
+- entrar en bucle hasta fin de ventana
+- reconstruir el target a partir del estado remoto
+- lanzar Playwright en cada ciclo
+- actualizar el backend con el resultado de cada intento
+- detenerse si la solicitud cambia de estado final
+
+En otras palabras:
+
+- `telegram-webhook` crea trabajo
+- `remote_worker.py` ejecuta trabajo
+- `worker-api` coordina estado
+
+## Qué hace exactamente `booking.py`
+
+`booking.py` concentra la lógica específica de VivaGym.
+
+Responsabilidades:
+
+- traducir una intención de reserva a selectores y acciones reales
+- resolver la fecha concreta a partir del target
+- seleccionar el día correcto en el carrusel
+- inspeccionar tarjetas de clase
+- decidir si una tarjeta coincide con el target
+- verificar disponibilidad
+- expandir la tarjeta
+- pulsar el botón de reserva
+- intentar confirmar si aparece diálogo o cambio de estado
+
+Es el archivo que más “conoce” la web de VivaGym.
+
+## Observabilidad
+
+### GitHub Actions
+
+Para una solicitud remota, GitHub es la mejor vista operativa en tiempo real.
+
+Ahí puedes seguir:
+
+- arranque del worker
+- número de intento
+- login
+- navegación a booking
+- matching de clase
+- disponibilidad detectada
+- reserva o no reserva
+- pausas entre ciclos
+
+### Supabase Database
+
+La base de datos te da la vista de estado persistido.
+
+Campos especialmente útiles:
+
 - `status`
 - `attempts`
 - `last_result`
 - `last_checked_at`
 - `booked_at`
 
-Functions:
-- `telegram-webhook`
-- `worker-api`
-
 ### Telegram
 
-El usuario final debería ver:
-- confirmación de creación
-- confirmación de lanzamiento del worker
-- mensaje final de `booked` o `expired`
+Telegram es la vista de usuario final.
 
-## Cómo usar el sistema hoy
+Debe comunicar:
 
-### Opción A. Local watch
+- que la solicitud fue aceptada
+- que el worker fue lanzado
+- que la solicitud acabó en éxito o expiración
 
-```bash
-cd /Users/alopez/vgymrobot/vgymrobot
-source venv/bin/activate
-python src/local_watch.py --day viernes --time 16:15 --class-name V-Metcon --interval-seconds 120 --duration-minutes 120
-```
+## Aislamiento entre usuarios
 
-### Opción B. GitHub clásico
+La arquitectura está pensada para que cada conversación con el bot quede acotada al usuario que la originó.
 
-1. Abre `VGymRobot - Solicitar Reserva`
-2. Rellena:
-   - `day`
-   - `time`
-   - `class_name`
-3. El estado queda en [requests.json](/Users/alopez/vgymrobot/vgymrobot/state/requests.json)
+Conceptualmente:
 
-### Opción C. Telegram multiusuario
+- cada usuario opera desde su propio chat
+- cada chat se asocia a una cuenta operativa
+- cada solicitud se crea dentro de esa cuenta
+- cada consulta de estado trabaja sobre esa misma cuenta
 
-1. El usuario abre el bot
-2. Envía `/credenciales ...`
-3. Envía `/reservar ...`
-4. El sistema crea la solicitud en Supabase
-5. GitHub ejecuta el worker
-6. Telegram envía el resultado final
+Esto evita que las respuestas de un usuario se comporten como notificaciones globales del bot.
 
-## Coste esperado
+## Configuración y despliegue
 
-### Local
+### Configuración local
 
-- coste cero salvo tu propia máquina
+- [.env.example](/Users/alopez/vgymrobot/vgymrobot/.env.example)
+- [preferences.yaml](/Users/alopez/vgymrobot/vgymrobot/preferences.yaml)
 
-### GitHub clásico
+### Configuración de GitHub
 
-- si el repo es público y usas runners estándar, normalmente gratis
-- si el repo es privado, consume minutos
+Los workflows usan `Actions secrets` para valores de entorno que no deben ir en el repositorio.
 
-### Multiusuario remoto
+### Configuración de Supabase
 
-- Supabase:
-  - base de datos y Edge Functions dentro del free tier, con los límites del plan
-- Telegram Bot API:
-  - gratis
-- GitHub Actions:
-  - depende de si el repo es público o privado
+Supabase usa:
 
-## Limitaciones actuales
+- secrets de proyecto para Edge Functions
+- esquema SQL para tablas y triggers
+- despliegue de funciones con CLI
 
-- El comando `/credenciales` sigue mandando la contraseña por chat privado de Telegram.
-- Para producción real sería mejor una web o Mini App para onboarding de credenciales.
-- El worker remoto actual vigila durante `2 horas` desde la creación de la solicitud.
-- La confirmación de reserva en VivaGym todavía depende de heurísticas del DOM después del click.
-- Los selectores de VivaGym pueden cambiar sin aviso.
-- Hay dos carriles de ejecución coexistiendo y ambos siguen en el repo por compatibilidad.
+### Configuración de Telegram
 
-## Riesgos y decisiones de diseño
+Telegram apunta a la función `telegram-webhook` mediante webhook.
 
-- `worker-api` expone una función pública sin JWT, pero protegida por `WORKER_SHARED_SECRET`.
-- Las credenciales de gimnasio no se guardan en claro en Supabase; se cifran con `CREDENTIALS_SECRET`.
-- GitHub no almacena credenciales de gimnasio por usuario; el worker las obtiene del backend en runtime.
-- El bot no comparte resultados entre usuarios porque todo se resuelve por `telegram_chat_id`.
+## Flujo de desarrollo
 
-## Documentación adicional
+### Para cambiar la lógica de reserva
+
+Archivos principales:
+
+- [booking.py](/Users/alopez/vgymrobot/vgymrobot/src/booking.py)
+- [auth.py](/Users/alopez/vgymrobot/vgymrobot/src/auth.py)
+
+### Para cambiar la lógica del worker remoto
+
+Archivos principales:
+
+- [remote_worker.py](/Users/alopez/vgymrobot/vgymrobot/src/remote_worker.py)
+- [worker_api.py](/Users/alopez/vgymrobot/vgymrobot/src/worker_api.py)
+- [remote-worker.yml](/Users/alopez/vgymrobot/vgymrobot/.github/workflows/remote-worker.yml)
+
+### Para cambiar el comportamiento conversacional del bot
+
+Archivo principal:
+
+- [telegram-webhook/index.ts](/Users/alopez/vgymrobot/vgymrobot/supabase/functions/telegram-webhook/index.ts)
+
+### Para cambiar el modelo de datos
+
+Archivo principal:
+
+- [schema.sql](/Users/alopez/vgymrobot/vgymrobot/supabase/schema.sql)
+
+## Estado del proyecto hoy
+
+El proyecto ya tiene:
+
+- un motor Playwright funcional contra VivaGym
+- flujo local de vigilancia
+- flujo remoto end-to-end con Telegram, Supabase y GitHub Actions
+- estado persistente de solicitudes
+- notificaciones de usuario por chat
+
+La documentación operativa adicional del despliegue remoto está en:
 
 - [multiuser-supabase-telegram.md](/Users/alopez/vgymrobot/vgymrobot/docs/multiuser-supabase-telegram.md)
-
-## Siguiente evolución recomendada
-
-Si se quiere endurecer el sistema para producción, los pasos más lógicos son:
-
-1. sustituir `/credenciales` por una web segura o Telegram Mini App
-2. añadir comandos administrativos (`/limpiar`, `/quiensoy`, `/misdatos`)
-3. mejorar las heurísticas de confirmación post-click en VivaGym
-4. añadir pruebas automáticas sobre el flujo remoto
-5. separar más claramente el carril legacy del carril multiusuario

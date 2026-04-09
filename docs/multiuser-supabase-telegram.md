@@ -108,5 +108,5 @@ curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
 ## Limitaciones del MVP
 
 - La ventana de vigilancia se fija en 2 horas desde la creación.
-- El comando `/credenciales` envía la contraseña en un chat privado de Telegram; para producción sería mejor un formulario web o Mini App.
-- El repo de GitHub debería ser privado si vas a operar para terceros.
+- La experiencia de onboarding de cuenta todavía puede evolucionar hacia una interfaz más guiada.
+- La ergonomía del flujo remoto seguirá mejorando según crezcan los casos de uso.
