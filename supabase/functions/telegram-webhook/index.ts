@@ -12,8 +12,9 @@ const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 const HELP_TEXT =
   "Comandos:\n" +
-  "/credenciales correo contraseña\n" +
-  "/reservar miercoles 17:00 V-Power\n" +
+  "/credenciales <correo> <contraseña>\n" +
+  "/reservar <dia> <hora> <clase>\n" +
+  "Ejemplo: /reservar viernes 16:15 V-Metcon\n" +
   "/estado\n" +
   "/cancelar <request_id>";
 
@@ -121,10 +122,10 @@ async function accountForChat(chatId: string) {
   return data;
 }
 
-async function createRequest(chatId: string, text: string): Promise<string> {
+async function createRequest(chatId: string, text: string) {
   const parts = text.trim().split(/\s+/);
   if (parts.length < 4) {
-    throw new Error("Uso: /reservar miercoles 17:00 V-Power");
+    throw new Error("Uso: /reservar <dia> <hora> <clase>");
   }
 
   const [, day, time, ...classParts] = parts;
@@ -151,8 +152,7 @@ async function createRequest(chatId: string, text: string): Promise<string> {
     throw new Error(`No se pudo crear la solicitud: ${error?.message ?? "unknown"}`);
   }
 
-  await dispatchGitHubWorker(data.id);
-  return `✅ Solicitud creada: ${data.id}\n🎯 ${data.class_name} ${data.day} ${data.time}`;
+  return data;
 }
 
 async function requestStatus(chatId: string): Promise<string> {
@@ -211,32 +211,37 @@ async function cancelRequest(chatId: string, text: string): Promise<string> {
   return `🛑 Solicitud cancelada: ${data.id}`;
 }
 
-Deno.serve(async (request) => {
+async function processTelegramUpdate(update: any): Promise<void> {
+  let chatId: string | null = null;
   try {
-    const update = await request.json();
     const message = update?.message;
 
     if (!message?.text || !message?.chat?.id) {
-      return new Response("ok");
+      return;
     }
 
-    const chatId = String(message.chat.id);
+    chatId = String(message.chat.id);
     const text = String(message.text).trim();
     const telegramUsername = message.from?.username ?? null;
     const displayName = message.from?.first_name
       ? `${message.from.first_name} ${message.from.last_name ?? ""}`.trim()
       : null;
 
-    if (text.startsWith("/start")) {
+    const normalizedText = text.replace(/^\/([a-z_]+)@\w+/i, "/$1");
+
+    if (normalizedText.startsWith("/start")) {
       await sendTelegramMessage(chatId, HELP_TEXT);
-      return new Response("ok");
+      return;
     }
 
-    if (text.startsWith("/credenciales")) {
-      const [, email, password] = text.split(/\s+/);
+    if (normalizedText.startsWith("/credenciales")) {
+      const [, email, password] = normalizedText.split(/\s+/);
       if (!email || !password) {
-        await sendTelegramMessage(chatId, "Uso: /credenciales correo contraseña");
-        return new Response("ok");
+        await sendTelegramMessage(
+          chatId,
+          "Uso: /credenciales <correo> <contraseña>",
+        );
+        return;
       }
 
       await upsertAccount(
@@ -250,31 +255,60 @@ Deno.serve(async (request) => {
         chatId,
         "🔐 Credenciales guardadas. Ya puedes usar /reservar miercoles 17:00 V-Power",
       );
-      return new Response("ok");
+      return;
     }
 
-    if (text.startsWith("/reservar")) {
-      const reply = await createRequest(chatId, text);
-      await sendTelegramMessage(chatId, reply);
-      return new Response("ok");
+    if (normalizedText.startsWith("/reservar")) {
+      const bookingRequest = await createRequest(chatId, normalizedText);
+      await sendTelegramMessage(
+        chatId,
+        `✅ Solicitud creada: ${bookingRequest.id}\n🎯 ${bookingRequest.class_name} ${bookingRequest.day} ${bookingRequest.time}`,
+      );
+
+      try {
+        await dispatchGitHubWorker(bookingRequest.id);
+        await sendTelegramMessage(
+          chatId,
+          "🤖 Worker lanzado. Te avisaré cuando haya resultado.",
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        await sendTelegramMessage(
+          chatId,
+          `⚠️ La solicitud se creó, pero no se pudo lanzar el worker: ${message}`,
+        );
+      }
+
+      return;
     }
 
-    if (text.startsWith("/estado")) {
+    if (normalizedText.startsWith("/estado")) {
       const reply = await requestStatus(chatId);
       await sendTelegramMessage(chatId, reply);
-      return new Response("ok");
+      return;
     }
 
-    if (text.startsWith("/cancelar")) {
-      const reply = await cancelRequest(chatId, text);
+    if (normalizedText.startsWith("/cancelar")) {
+      const reply = await cancelRequest(chatId, normalizedText);
       await sendTelegramMessage(chatId, reply);
-      return new Response("ok");
+      return;
     }
 
     await sendTelegramMessage(chatId, HELP_TEXT);
-    return new Response("ok");
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(message, { status: 500 });
+    if (chatId) {
+      try {
+        await sendTelegramMessage(chatId, `⚠️ Error: ${message}`);
+      } catch (_) {
+        // Si Telegram falla al responder, devolvemos igualmente el 500 original.
+      }
+    }
   }
+}
+
+Deno.serve(async (request) => {
+  const update = await request.json();
+  EdgeRuntime.waitUntil(processTelegramUpdate(update));
+  return new Response("ok");
 });
