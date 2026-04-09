@@ -19,6 +19,7 @@ env/
 node_modules/
 package-lock.json
 package.json
+supabase/.temp/
 
 # Logs
 logs/*.log
